@@ -1,13 +1,19 @@
 package org.onesocialweb.openfire.registration.servlet;
 
 import java.io.IOException;
-import java.io.PrintStream;
 import java.io.PrintWriter;
 import java.sql.SQLException;
+import java.text.SimpleDateFormat;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.Date;
 import java.util.HashSet;
 import java.util.Set;
 
+import javax.mail.Message;
+import javax.mail.MessagingException;
+import javax.mail.internet.InternetAddress;
+import javax.mail.internet.MimeMessage;
 import javax.servlet.ServletConfig;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServlet;
@@ -18,11 +24,11 @@ import org.jivesoftware.admin.AuthCheckFilter;
 import org.jivesoftware.openfire.XMPPServer;
 import org.jivesoftware.openfire.user.User;
 import org.jivesoftware.openfire.user.UserManager;
+import org.jivesoftware.util.EmailService;
 import org.jivesoftware.util.JiveGlobals;
 import org.onesocialweb.openfire.registration.db.DBManager;
 import org.onesocialweb.openfire.registration.exception.EmailRegisteredException;
 
-import sun.net.smtp.SmtpClient;
 
 @SuppressWarnings("serial")
 public class MailServlet extends HttpServlet {
@@ -54,63 +60,87 @@ public class MailServlet extends HttpServlet {
 
 	}
 	
-	private void doProcess(HttpServletRequest request, HttpServletResponse response) throws SQLException, IOException, EmailRegisteredException {
-		
+	private void doProcess(HttpServletRequest request,
+			HttpServletResponse response) throws SQLException, IOException,
+			EmailRegisteredException {
 		String from = "OneSocialWeb";
-		String to =request.getParameter("to");
+		String to = request.getParameter("to");
 		response.setContentType("text/plain");
-		PrintWriter out = response.getWriter();		
+		PrintWriter out = response.getWriter();
 
 		try {
-			//if there is an account with that email or an active registration code, do not allow ...
+			// if there is an account with that email or an active registration
+			// code, do not allow ...
 			if (emailRegistered(to))
 				throw new EmailRegisteredException();
-			
-			//Obtain a registration code: 
-			int duration = JiveGlobals.getIntProperty("onesocialweb.registration.duration" , 30);
+			// Obtain a registration code:
+			int duration = JiveGlobals.getIntProperty(
+					"onesocialweb.registration.duration", 30);
 			String code = DBManager.getInstance().createCode(duration, 1, to);
-			if (code==null)			
+			if (code == null)
 				throw new SQLException();
 
-			
-			//Get the Mail Server Settings from Openfire
-			String mailHost=JiveGlobals.getProperty("mail.smtp.host");
-					
-			SmtpClient smtp;		
-			if (mailHost!=null)
-				smtp = new SmtpClient(mailHost);  
-			else // assume localhost
-				smtp = new SmtpClient();  
-		
-			//Prepare the email message
-			smtp.from(from);
-			smtp.to(to);
-			PrintStream msg = smtp.startMessage();
+			EmailService service = EmailService.getInstance();
+			MimeMessage message = service.createMimeMessage();
+			// Set the date of the message to be the current date
+			SimpleDateFormat format = new SimpleDateFormat(
+					"EEE, dd MMM yyyy HH:mm:ss Z", java.util.Locale.US);
+			format.setTimeZone(JiveGlobals.getTimeZone());
+			message.setHeader("Date", format.format(new Date()));
 
-			msg.println("To: " + to);  // so mailers will display the To: address
-			msg.println("Subject: OneSocialWeb Registration");
-			msg.println();
-			msg.println("Thanks for your interest in OneSocialWeb! Here is a registration code to create your new account: "+code);
-			msg.println();
-			msg.print("This code will be valid for a period of ");
-			msg.print(duration);
-			msg.println(" days, after which it will expire. Please proceed to the Registration tab at the website of your OneSocialWeb provider.");
+			// Set to and from.
+			message.setRecipient(Message.RecipientType.TO, new InternetAddress(
+					to, null));
+			message.setFrom(new InternetAddress(from, null));
+			message.setSubject("OneSocialWeb Registration");
+			String body = "Thanks for your interest in OneSocialWeb! Here is a registration code to create your new account: "
+					+ code;
+			body += "\n \nThis code will be valid for a period of " + duration;
+			body += " days, after which it will expire. Please proceed to the Registration tab at the website of your OneSocialWeb provider.\n \n";
+			body += "We hope you will enjoy the federation! If you do, please spread the word! \n \n";
+			body += "--- \n \n Sent by OneSocialWeb at "
+					+ XMPPServer.getInstance().getServerInfo().getXMPPDomain();
 
-			msg.println(); 
-			msg.println("We hope you will enjoy the federation! If you do, please spread the word!");
-			msg.println();
-			msg.println("---");
-			msg.println("Sent by OneSocialWeb at " + XMPPServer.getInstance().getServerInfo().getXMPPDomain());
-
-			smtp.closeServer();
-
-			out.println("Thanks for the joining the Federation!");
-		}
-		catch (IOException e) {
+			message.setText(body);
+			service.sendMessagesImmediately(Collections.singletonList(message));
+		} catch(MessagingException me) {
+			out.println("There was a problem sending email...");
+			me.printStackTrace();
+		} catch (IOException e) {
 			out.println("There was a problem sending email...");
 			e.printStackTrace();
 		}
 		
+		try {
+			
+			String adminTo = JiveGlobals.getProperty("onesocialweb.admin.mail");  
+			if(adminTo != null) {
+				EmailService service = EmailService.getInstance();
+				MimeMessage message = service.createMimeMessage();
+				// Set the date of the message to be the current date
+				SimpleDateFormat format = new SimpleDateFormat(
+						"EEE, dd MMM yyyy HH:mm:ss Z", java.util.Locale.US);
+				format.setTimeZone(JiveGlobals.getTimeZone());
+				message.setHeader("Date", format.format(new Date()));
+	
+				// Set to and from.
+				message.setRecipient(Message.RecipientType.TO, new InternetAddress(
+						adminTo, null));
+				message.setFrom(new InternetAddress(from, null));
+				message.setSubject("OneSocialWeb Registration");
+				String body = to + " has just requested a registration code\n";
+				
+				message.setText(body);
+				service.sendMessagesImmediately(Collections.singletonList(message));
+			}
+		} catch(MessagingException me) {
+			me.printStackTrace();
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+		
+		
+
 	}
 	
 	@Override
